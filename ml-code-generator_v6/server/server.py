@@ -6,7 +6,7 @@ import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
-from deepseek_agent.api import run
+from deepseek_agent.api import run, revise_code
 import tempfile
 import shutil
 from feedback_api import feedback_api
@@ -118,6 +118,22 @@ def rerun():
     params = data.get('params')
     result = rerun_task(task_id, params)
     return jsonify(result)
+
+@app.route('/api/feedback', methods=['POST'])
+def feedback():
+    try:
+        data = request.json
+        code = data.get('code')
+        feedback = data.get('feedback')
+        task_prompt = data.get('task_prompt')
+        previous_code = data.get('previous_code', None)
+        if not code or not feedback or not task_prompt:
+            return jsonify({'message': '缺少必要参数'}), 400
+        # 这里用feedback作为error_log传给revise_code
+        revised_code = revise_code(task_prompt, code, feedback)
+        return jsonify({'revised_code': revised_code})
+    except Exception as e:
+        return jsonify({'message': 'Server error', 'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(port=5000) 

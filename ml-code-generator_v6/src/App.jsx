@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ClipLoader } from 'react-spinners';
 import './App.css';
-import { uploadDataset, getDatasets, deleteDataset, generateCode, generateCodeRealtime, connectWebSocket, disconnectWebSocket, getDatasetPreview } from './services/api';
+import { uploadDataset, getDatasets, deleteDataset, generateCode, generateCodeRealtime, connectWebSocket, disconnectWebSocket, getDatasetPreview, analyzeMetricsRealtime, submitFeedback } from './services/api';
 import { VscFile, VscFileCode, VscJson, VscFilePdf, VscMarkdown } from 'react-icons/vsc';
 import IndicatorDisplay from './components/IndicatorDisplay';
 import ResultEditor from './components/ResultEditor';
@@ -51,6 +51,18 @@ function App() {
 
   // 新增：中间区域tab切换
   const [centerTab, setCenterTab] = useState('process'); // 'process' or 'dataset'
+
+  // 添加指标相关状态
+  const [analyzedMetrics, setAnalyzedMetrics] = useState(null);
+  const [isAnalyzingMetrics, setIsAnalyzingMetrics] = useState(false);
+  const [metricsAnalysisError, setMetricsAnalysisError] = useState(null);
+
+  // 在Outcome状态下（!showProcessPanel）渲染结果展示区下方的按钮和反馈输入框
+  const [feedbackInput, setFeedbackInput] = useState('');
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+  
+  // 跟踪是否已经运行过代码生成
+  const [hasRunBefore, setHasRunBefore] = useState(false);
 
   // WebSocket连接管理
   useEffect(() => {
@@ -503,12 +515,45 @@ function App() {
       );
   }
 
-  // 修改 handleRunClick 函数
+  // 添加指标分析函数
+  const analyzeTaskMetrics = async (taskPrompt) => {
+    setIsAnalyzingMetrics(true);
+    setMetricsAnalysisError(null);
+    
+    try {
+      const sessionId = analyzeMetricsRealtime(taskPrompt, {
+        onStarted: (data) => {
+          console.log('Metrics analysis started:', data);
+        },
+        
+        onComplete: (data) => {
+          console.log('Metrics analysis complete:', data);
+          setAnalyzedMetrics(data.metrics);
+          setIsAnalyzingMetrics(false);
+        },
+        
+        onError: (data) => {
+          console.error('Metrics analysis error:', data);
+          setMetricsAnalysisError(data.error);
+          setIsAnalyzingMetrics(false);
+        }
+      });
+      
+      return sessionId;
+    } catch (error) {
+      console.error('Error starting metrics analysis:', error);
+      setMetricsAnalysisError(error.message);
+      setIsAnalyzingMetrics(false);
+    }
+  };
+
+  // 修改handleRunClick函数，添加指标分析
   const handleRunClick = async () => {
     setShowOutcomeButton(true);
     setShowProcessPanel(true);
     setIsAnimating(true);
     setIsGenerating(true);
+    setHasRunBefore(true);
     
     try {
       // 检查是否上传了数据集
@@ -527,7 +572,6 @@ function App() {
         return;
       }
 
-      // -- 开始修改 --
       // 1. 收集所有数据集的路径
       const datasetPaths = datasetFiles.map(f => f.filePath).filter(Boolean);
       if (datasetPaths.length === 0) {
@@ -555,11 +599,13 @@ ${datasetsDescription}
 评估方法: ${selectedEval.join(', ')}
 评估描述: ${evalDesc}
 参考解决方案: ${solution}`;
-      // -- 结束修改 --
       
       console.log('Generating code for multiple datasets:', { taskPrompt, datasetPaths });
       
-      // 重置生成进度
+      // 4. 先进行指标分析
+      await analyzeTaskMetrics(taskPrompt);
+      
+      // 5. 重置生成进度
       setGenerationProgress({
         currentStep: 0,
         totalSteps: 0,
@@ -572,7 +618,7 @@ ${datasetsDescription}
       });
       setRealTimeSteps([]);
       
-      // 使用实时代码生成，传递路径数组
+      // 6. 使用实时代码生成，传递路径数组
       const sessionId = generateCodeRealtime(taskPrompt, datasetPaths, {
         onStarted: (data) => {
           console.log('Generation started:', data);
@@ -767,8 +813,8 @@ ${datasetsDescription}
       });
       
     } catch (error) {
-      console.error('Error generating code:', error);
-      alert('生成代码时发生错误: ' + error.message);
+      console.error('Error in handleRunClick:', error);
+      alert('启动失败: ' + error.message);
       setIsAnimating(false);
       setIsGenerating(false);
     }
@@ -868,6 +914,66 @@ ${datasetsDescription}
     }
     
     return steps;
+  };
+
+  const handleBackToProcess = () => {
+    setShowProcessPanel(true);
+    setShowOutcomeButton(true);
+  };
+
+  const handleSubmitFeedback = async () => {
+    if (!feedbackInput.trim()) return;
+    
+    // 检查必要参数
+    if (!generationProgress.accumulatedCode || !taskDesc) {
+      alert('请先运行代码生成，或确保任务描述不为空');
+      return;
+    }
+    
+    console.log('提交反馈参数:', {
+      feedback: feedbackInput,
+      code: generationProgress.accumulatedCode,
+      taskPrompt: taskDesc
+    });
+    
+    setIsSubmittingFeedback(true);
+    try {
+      // 调用后端API进行代码改进
+      const revisedCode = await submitFeedback(
+        feedbackInput,
+        generationProgress.accumulatedCode,
+        taskDesc,
+        null // previousCode 可根据需要传递
+      );
+      
+      console.log('收到修正后的代码:', revisedCode);
+      
+      setGenerationProgress(prev => ({
+        ...prev,
+        accumulatedCode: revisedCode
+      }));
+      
+      // 添加反馈处理记录到realTimeSteps
+      setRealTimeSteps(prev => [...prev, {
+        id: prev.length + 1,
+        name: '用户反馈处理',
+        message: `根据反馈"${feedbackInput}"修正了代码`,
+        status: 'revised',
+        code: revisedCode,
+        timestamp: new Date().toLocaleTimeString()
+      }]);
+      
+      setTab('code'); // 切换到代码标签页
+      setFeedbackInput('');
+      
+      // 显示成功消息
+      alert('反馈已提交，代码已根据您的意见修正！');
+    } catch (err) {
+      console.error('反馈提交失败:', err);
+      alert('反馈提交失败：' + err.message);
+    } finally {
+      setIsSubmittingFeedback(false);
+    }
   };
 
   return (
@@ -1022,6 +1128,12 @@ ${datasetsDescription}
               generationProgress={generationProgress}
               realTimeSteps={realTimeSteps}
               onOutcomeClick={handleOutcomeClick}
+              onCodeUpdate={(newCode) => {
+                setGenerationProgress(prev => ({
+                  ...prev,
+                  accumulatedCode: newCode
+                }));
+              }}
             />
           ) : (
           <>
@@ -1111,18 +1223,64 @@ ${datasetsDescription}
         boxSizing: 'border-box' 
       }}>
         {showProcessPanel ? (
-          <div className="process-panel" style={{
-            background: '#fff', padding: '20px', borderRadius: '12px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.1)', height: '100%',
-            display: 'flex', flexDirection: 'column', overflowY: 'hidden'
+          <div className="error-debug-panel" style={{
+            padding: 20,
+            background: '#fff',
+            borderRadius: 12,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+            height: '100%',
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between'
           }}>
-            <h2 style={{ 
-              marginBottom: 20, fontSize: 24, textAlign: 'center', fontWeight: 700,
-              position: 'sticky', top: 0, background: '#fff', zIndex: 10,
-              padding: '0 0 8px 0', marginTop: 0
+            <h2 style={{
+              marginBottom: 20,
+              fontSize: 24,
+              textAlign: 'center',
+              fontWeight: 700,
+              position: 'sticky',
+              top: 0,
+              background: '#fff',
+              zIndex: 10,
+              padding: '0 0 8px 0',
+              marginTop: 0
             }}>Process Details</h2>
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: '1.2rem' }}>
-              {/* This area is intentionally left blank during generation */}
+            <div style={{flex: 1, overflowY: 'auto'}}>
+              {realTimeSteps.filter(step => step.error || step.message).length === 0 ? (
+                <div style={{color: '#888', textAlign: 'center'}}>暂无报错或调试信息</div>
+              ) : (
+                realTimeSteps.map((step, idx) =>
+                  (step.error || step.message) ? (
+                    <div key={idx} style={{marginBottom: 18, borderBottom: '1px solid #eee', paddingBottom: 8}}>
+                      <div style={{fontWeight: 600, marginBottom: 4}}>步骤 {step.id}：</div>
+                      {step.error && (
+                        <div style={{color: 'red', marginBottom: 4}}>错误：{step.error}</div>
+                      )}
+                      {step.message && (
+                        <div style={{color: '#007bff'}}>调试：{step.message}</div>
+                      )}
+                    </div>
+                  ) : null
+                )
+              )}
+            </div>
+            {/* 反馈输入区和历史 */}
+            <div style={{marginTop: 24}}>
+              <textarea
+                value={feedbackInput}
+                onChange={e => setFeedbackInput(e.target.value)}
+                placeholder="请输入你的修改意见（可多次提交）"
+                rows={3}
+                style={{width: '100%', borderRadius: 6, border: '1px solid #ccc', padding: 12, fontSize: 15, resize: 'vertical', marginBottom: 12}}
+              />
+              <button
+                onClick={handleSubmitFeedback}
+                style={{background: '#28a745', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 24px', fontWeight: 600, fontSize: 15, cursor: 'pointer', width: '100%'}}
+                disabled={!feedbackInput.trim() || isSubmittingFeedback}
+              >
+                {isSubmittingFeedback ? '提交中...' : '提交反馈'}
+              </button>
             </div>
           </div>
         ) : (
@@ -1139,9 +1297,21 @@ ${datasetsDescription}
             </div>
             <div className="tab-content" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               {tab === 'code' ? (
-                <ResultEditor />
+                <ResultEditor 
+                  generatedCode={generationProgress.accumulatedCode || '# 代码将在任务执行后生成...'}
+                  onCodeChange={(newCode) => {
+                    setGenerationProgress(prev => ({
+                      ...prev,
+                      accumulatedCode: newCode
+                    }));
+                  }}
+                />
               ) : (
-                <IndicatorDisplay />
+                <IndicatorDisplay 
+                  analyzedMetrics={analyzedMetrics}
+                  isAnalyzingMetrics={isAnalyzingMetrics}
+                  metricsAnalysisError={metricsAnalysisError}
+                />
               )}
             </div>
           </>
@@ -1156,7 +1326,7 @@ ${datasetsDescription}
           disabled={isGenerating}
           style={{
             position: 'fixed',
-            bottom: '60px',
+            bottom: '120px',
             right: '120px',
             width: 'auto',
             padding: '0 30px',
@@ -1170,6 +1340,21 @@ ${datasetsDescription}
         >
           OUTCOME
         </button>
+      )}
+
+      {/* 在主内容区（结果展示区）下方，仅在Outcome状态下且已运行过时显示"返回修改"按钮 */}
+      {!showProcessPanel && hasRunBefore && (
+        <div style={{marginTop: 32, padding: '24px 0 0 0', borderTop: '1px solid #eee', textAlign: 'center'}}>
+          <button
+            onClick={handleBackToProcess}
+            style={{
+              background: '#007bff', color: '#fff', border: 'none', borderRadius: 6,
+              padding: '10px 32px', fontWeight: 600, fontSize: 16, cursor: 'pointer', marginBottom: 24
+            }}
+          >
+            返回修改
+          </button>
+        </div>
       )}
     </div>
   );
