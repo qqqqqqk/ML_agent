@@ -1,17 +1,13 @@
-from .agent import WritterAgent, PlannerAgent, RefinerAgent, RevisorAgent
+from .agent import WritterAgent, PlannerAgent, RefinerAgent, RevisorAgent, MetricsAnalyzerAgent
 import subprocess
 import argparse
 import os
 import json
-from pathlib import Path
-from dotenv import load_dotenv
 
 
 
-env_path = Path(__file__).parent.parent.parent / ".env"  # 向上回溯两级到根目录
-load_dotenv(env_path)
 base_url = 'https://api.deepseek.com'
-api_key = os.getenv("DEEPSEEK_API_KEY")  # 从环境变量读取 DeepSeek API 密钥，推荐在 .env 文件中设置
+api_key = 'sk-994f4eb9a08942c4b494a84d9ee3ff85'
 model = "deepseek-chat"
 
 
@@ -182,6 +178,20 @@ def check_code(code: str):
         
     result = checking(save_fold, python_file_name)
     return result
+
+def analyze_task_metrics(task_prompt: str):
+    '''
+    从任务描述中分析评估指标
+    
+    Params:
+        task_prompt: 包含任务描述、评估方法等的完整文本
+        
+    Returns:
+        metrics_data: 包含识别到的指标信息的字典
+    '''
+    agent = MetricsAnalyzerAgent(base_url, api_key, model)
+    metrics_data = agent.analyze_metrics(task_prompt)
+    return metrics_data
 
 if __name__ == "__main__":
     main()

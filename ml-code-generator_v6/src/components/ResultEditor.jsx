@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 
 // 结果编辑组件
-const ResultEditor = () => {
-  const [generatedCode, setGeneratedCode] = useState('# 代码将在任务执行后生成...');
+const ResultEditor = ({ generatedCode = '# 代码将在任务执行后生成...', onCodeChange }) => {
   const [visibleSteps, setVisibleSteps] = useState([]);
 
   // 示例：下载代码
@@ -22,7 +21,7 @@ const ResultEditor = () => {
       <textarea
         className="code-area"
         value={generatedCode}
-        onChange={(e) => setGeneratedCode(e.target.value)}
+        onChange={(e) => onCodeChange && onCodeChange(e.target.value)}
         placeholder="代码将在任务执行后生成..."
       />
       <div className="code-btns">
