@@ -1,10 +1,13 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { evaluateInstructionFollowing } from '../services/api';
 
 // 指标展示组件
 const IndicatorDisplay = ({ 
   analyzedMetrics, 
   isAnalyzingMetrics, 
-  metricsAnalysisError
+  metricsAnalysisError,
+  solution,
+  generatedCode
 }) => {
   // 获取当前显示的指标
   const getCurrentMetrics = () => {
@@ -25,6 +28,91 @@ const IndicatorDisplay = ({
   };
 
   const currentMetrics = getCurrentMetrics();
+
+  // 计算指令跟随度（简单Jaccard相似度）
+  let instructionFollowingScore = null;
+  if (solution && generatedCode) {
+    // 以行为单位，去除空行和首尾空格
+    const solLines = solution.split('\n').map(l => l.trim()).filter(l => l);
+    const genLines = generatedCode.split('\n').map(l => l.trim()).filter(l => l);
+    const solSet = new Set(solLines);
+    const genSet = new Set(genLines);
+    const intersection = new Set([...solSet].filter(x => genSet.has(x)));
+    const union = new Set([...solSet, ...genSet]);
+    const score = union.size === 0 ? 1 : intersection.size / union.size;
+    instructionFollowingScore = (score * 100).toFixed(1) + '%';
+  }
+
+  // 评估维度实现
+  // 1. 完整性（Completeness）：solution有多少非空行，生成代码有多少覆盖
+  let completenessScore = null;
+  if (solution && generatedCode) {
+    const solLines = solution.split('\n').map(l => l.trim()).filter(l => l);
+    const genLines = generatedCode.split('\n').map(l => l.trim()).filter(l => l);
+    const covered = solLines.filter(l => genLines.includes(l)).length;
+    completenessScore = solLines.length === 0 ? 'N/A' : ((covered / solLines.length) * 100).toFixed(1) + '%';
+  }
+
+  // 2. 精确性（Precision）：如solution有JSON/CSV/结构要求，简单检测格式（这里只做JSON/CSV/字数限制的简单检测）
+  let precisionScore = null;
+  if (solution && generatedCode) {
+    if (/json/i.test(solution)) {
+      try {
+        JSON.parse(generatedCode);
+        precisionScore = '100% (JSON格式)';
+      } catch {
+        precisionScore = '0% (非JSON)';
+      }
+    } else if (/csv/i.test(solution)) {
+      precisionScore = /,/.test(generatedCode) ? '100% (含逗号)' : '0% (无逗号)';
+    } else if (/\d{1,4}字/.test(solution)) {
+      // 检查字数限制
+      const match = solution.match(/(\d{1,4})字/);
+      if (match) {
+        const limit = parseInt(match[1]);
+        const len = generatedCode.replace(/\s/g, '').length;
+        precisionScore = len <= limit ? `100% (${len}字)` : `0% (${len}字)`;
+      }
+    } else {
+      precisionScore = 'N/A';
+    }
+  }
+
+  // 3. 一致性（Consistency）：检查solution中有否"不使用xxx"，生成代码是否包含xxx
+  let consistencyScore = null;
+  if (solution && generatedCode) {
+    const forbidMatch = solution.match(/不使用([\u4e00-\u9fa5A-Za-z0-9_]+)/);
+    if (forbidMatch) {
+      const keyword = forbidMatch[1];
+      consistencyScore = generatedCode.includes(keyword) ? '0% (出现违禁内容)' : '100% (无违禁内容)';
+    } else {
+      consistencyScore = 'N/A';
+    }
+  }
+
+  // 4. 约束遵守（Constraint Adherence）：如solution有"禁止xxx"或"不提及xxx"，生成代码是否包含xxx
+  let constraintScore = null;
+  if (solution && generatedCode) {
+    const banMatch = solution.match(/禁止([\u4e00-\u9fa5A-Za-z0-9_]+)/);
+    const notMentionMatch = solution.match(/不提及([\u4e00-\u9fa5A-Za-z0-9_]+)/);
+    let violated = false;
+    if (banMatch && generatedCode.includes(banMatch[1])) violated = true;
+    if (notMentionMatch && generatedCode.includes(notMentionMatch[1])) violated = true;
+    constraintScore = (banMatch || notMentionMatch) ? (violated ? '0% (出现违禁内容)' : '100% (无违禁内容)') : 'N/A';
+  }
+
+  // LLM评估结果
+  const [llmEval, setLlmEval] = useState(null);
+  useEffect(() => {
+    if (solution && generatedCode) {
+      setLlmEval('loading');
+      evaluateInstructionFollowing(solution, generatedCode)
+        .then(setLlmEval)
+        .catch(e => setLlmEval({ error: e.message }));
+    } else {
+      setLlmEval(null);
+    }
+  }, [solution, generatedCode]);
 
   // 下载指标
   const handleDownloadMetrics = () => {
@@ -136,6 +224,60 @@ const IndicatorDisplay = ({
           <div style={{ color: '#888', fontSize: '15px', margin: '24px 0' }}>未识别到评估指标</div>
         )}
       </div>
+      
+      {/* 指令跟随度核心评估维度 */}
+      {solution && generatedCode && (
+        <div style={{
+          padding: '8px 12px',
+          margin: '4px 0',
+          background: '#fffbe6',
+          borderRadius: '6px',
+          border: '2px solid #ff9800',
+          fontWeight: 600,
+          color: '#b26a00'
+        }}>
+          <div style={{ fontWeight: 700, fontSize: 16, margin: '6px 0 8px 0', color: '#b26a00' }}>
+            评估指令跟随能力（Instruction Following）
+          </div>
+          {llmEval === 'loading' && <div>大模型评估中...</div>}
+          {llmEval && llmEval.error && <div style={{color: 'red'}}>评估失败: {llmEval.error}</div>}
+          {llmEval && !llmEval.error ? (
+            <>
+              <div style={{ fontWeight: 400, fontSize: 15, margin: '6px 0 0 0' }}>
+                完整性（Completeness）：<span style={{ color: '#ff9800' }}>{llmEval.completeness}分</span>
+                <span style={{ fontWeight: 400, fontSize: 12, color: '#888', marginLeft: 8 }}>{llmEval.completeness_reason}</span>
+              </div>
+              <div style={{ fontWeight: 400, fontSize: 15, margin: '2px 0 0 0' }}>
+                精确性（Precision）：<span style={{ color: '#ff9800' }}>{llmEval.precision}分</span>
+                <span style={{ fontWeight: 400, fontSize: 12, color: '#888', marginLeft: 8 }}>{llmEval.precision_reason}</span>
+              </div>
+              <div style={{ fontWeight: 400, fontSize: 15, margin: '2px 0 0 0' }}>
+                一致性（Consistency）：<span style={{ color: '#ff9800' }}>{llmEval.consistency}分</span>
+                <span style={{ fontWeight: 400, fontSize: 12, color: '#888', marginLeft: 8 }}>{llmEval.consistency_reason}</span>
+              </div>
+              <div style={{ fontWeight: 400, fontSize: 15, margin: '2px 0 0 0' }}>
+                约束遵守（Constraint Adherence）：<span style={{ color: '#ff9800' }}>{llmEval.constraint}分</span>
+                <span style={{ fontWeight: 400, fontSize: 12, color: '#888', marginLeft: 8 }}>{llmEval.constraint_reason}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontWeight: 400, fontSize: 15, margin: '6px 0 0 0' }}>
+                完整性（Completeness）：<span style={{ color: '#ff9800' }}>{completenessScore}</span>
+              </div>
+              <div style={{ fontWeight: 400, fontSize: 15, margin: '2px 0 0 0' }}>
+                精确性（Precision）：<span style={{ color: '#ff9800' }}>{precisionScore}</span>
+              </div>
+              <div style={{ fontWeight: 400, fontSize: 15, margin: '2px 0 0 0' }}>
+                一致性（Consistency）：<span style={{ color: '#ff9800' }}>{consistencyScore}</span>
+              </div>
+              <div style={{ fontWeight: 400, fontSize: 15, margin: '2px 0 0 0' }}>
+                约束遵守（Constraint Adherence）：<span style={{ color: '#ff9800' }}>{constraintScore}</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
       
       <button 
         onClick={handleDownloadMetrics} 

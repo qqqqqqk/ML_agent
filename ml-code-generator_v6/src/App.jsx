@@ -598,7 +598,8 @@ ${datasetsDescription}
 其他信息:
 评估方法: ${selectedEval.join(', ')}
 评估描述: ${evalDesc}
-参考解决方案: ${solution}`;
+
+${solution ? `请严格按照下方参考解决方案的思路和结构进行代码实现，除非有明显错误，否则不要随意更改。参考解决方案如下（请严格遵循）：\n\n\n${solution}\n\n` : ''}`;
       
       console.log('Generating code for multiple datasets:', { taskPrompt, datasetPaths });
       
@@ -1153,7 +1154,7 @@ ${datasetsDescription}
                   </div>
                 </div>
                 {filePreview && (
-                  <div className="data-info-section" style={{ height: 420, overflowY: 'auto', minHeight: 220 }}>
+                  <div className="data-info-section" style={{ height: 420, overflowY: 'auto', minHeight: 220, maxWidth: 450, minWidth: 300, width: '100%' }}>
                     <div className="basic-info">
                       <h4>Basic information</h4>
                       <div>File name: {filePreview.name}</div>
@@ -1164,9 +1165,9 @@ ${datasetsDescription}
                       <div>Update time: {filePreview.updateTime}</div>
                       <div>Ratio of missing value: {filePreview.missingRatio}</div>
                     </div>
-                    <div className="data-preview">
+                    <div className="data-preview" style={{ overflowX: 'auto', width: '100%' }}>
                       <h4>Data preview</h4>
-                      <table>
+                      <table style={{ minWidth: 600 }}>
                         <thead>
                           <tr>
                             {filePreview.previewData && filePreview.previewData.length > 0 && (() => {
@@ -1307,11 +1308,15 @@ ${datasetsDescription}
                   }}
                 />
               ) : (
-                <IndicatorDisplay 
-                  analyzedMetrics={analyzedMetrics}
-                  isAnalyzingMetrics={isAnalyzingMetrics}
-                  metricsAnalysisError={metricsAnalysisError}
-                />
+                <div style={{height: 630, maxHeight: 630, overflowY: 'auto'}}>
+                  <IndicatorDisplay 
+                    analyzedMetrics={analyzedMetrics}
+                    isAnalyzingMetrics={isAnalyzingMetrics}
+                    metricsAnalysisError={metricsAnalysisError}
+                    solution={solution}
+                    generatedCode={generationProgress.accumulatedCode}
+                  />
+                </div>
               )}
             </div>
           </>
