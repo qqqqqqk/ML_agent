@@ -461,13 +461,6 @@ async function generateCurrentStepCode(task_prompt, current_step, step_id, previ
     let output = '';
     let error = '';
 
-    // 添加超时机制
-    const timeout = setTimeout(() => {
-      console.error('Python process timeout in generateCurrentStepCode, killing process...');
-      pythonProcess.kill('SIGKILL');
-      reject(new Error('Process timeout - code generation took too long'));
-    }, 60000); // 60秒超时
-
     pythonProcess.stdout.on('data', (data) => {
       output += data.toString('utf8');
     });
@@ -477,7 +470,6 @@ async function generateCurrentStepCode(task_prompt, current_step, step_id, previ
     });
 
     pythonProcess.on('close', (code) => {
-      clearTimeout(timeout);
       if (code !== 0) {
         reject(new Error(error));
       } else {
@@ -486,7 +478,6 @@ async function generateCurrentStepCode(task_prompt, current_step, step_id, previ
     });
 
     pythonProcess.on('error', (err) => {
-      clearTimeout(timeout);
       console.error('Python process error in generateCurrentStepCode:', err);
       reject(new Error(`Process error: ${err.message}`));
     });
@@ -540,13 +531,6 @@ async function checkCode(code) {
     let output = '';
     let error = '';
 
-    // 添加超时机制
-    const timeout = setTimeout(() => {
-      console.error('Python process timeout in checkCode, killing process...');
-      pythonProcess.kill('SIGKILL');
-      resolve({ success: false, stderr: 'Process timeout - code check took too long' });
-    }, 30000); // 30秒超时
-
     pythonProcess.stdout.on('data', (data) => {
       output += data.toString('utf8');
     });
@@ -558,7 +542,6 @@ async function checkCode(code) {
     });
 
     pythonProcess.on('close', (code) => {
-      clearTimeout(timeout); // 清除超时
       if (code !== 0) {
         // 当进程以非0代码退出时，也认为是失败
         resolve({ success: false, stderr: error });
@@ -574,7 +557,6 @@ async function checkCode(code) {
     });
 
     pythonProcess.on('error', (err) => {
-      clearTimeout(timeout);
       console.error('Python process error in checkCode:', err);
       resolve({ success: false, stderr: `Process error: ${err.message}` });
     });
@@ -718,6 +700,38 @@ app.post('/api/feedback', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// 指令跟随能力评估API
+app.post('/api/evaluate-instruction-following', async (req, res) => {
+  const { solution, generated_code } = req.body;
+  if (!solution || !generated_code) {
+    return res.status(400).json({ error: 'solution and generated_code are required' });
+  }
+  try {
+    const pythonProcess = spawn('python', [
+      '-c',
+      `from deepseek_agent.api import evaluate_instruction_following; import json; print(json.dumps(evaluate_instruction_following(${JSON.stringify(solution)}, ${JSON.stringify(generated_code)})))`
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+
+    let output = '';
+    pythonProcess.stdout.on('data', (data) => { output += data.toString('utf8'); });
+    pythonProcess.stderr.on('data', (data) => { console.error('stderr:', data.toString('utf8')); });
+
+    pythonProcess.on('close', (code) => {
+      try {
+        const result = JSON.parse(output.trim());
+        res.json(result);
+      } catch (e) {
+        res.status(500).json({ error: 'Failed to parse python output', raw: output });
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

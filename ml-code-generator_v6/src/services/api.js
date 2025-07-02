@@ -270,4 +270,15 @@ export const submitFeedback = async (feedback, code, taskPrompt, previousCode = 
   }
   const data = await response.json();
   return data.revised_code;
-}; 
+};
+
+// 指令跟随能力评估API
+export async function evaluateInstructionFollowing(solution, generatedCode) {
+  const res = await fetch(`${API_BASE_URL}/evaluate-instruction-following`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ solution, generated_code: generatedCode })
+  });
+  if (!res.ok) throw new Error('API error');
+  return await res.json();
+} 
