@@ -1,17 +1,16 @@
-from .agent import WritterAgent, PlannerAgent, RefinerAgent, RevisorAgent
+from .agent import WritterAgent, PlannerAgent, RefinerAgent, RevisorAgent, MetricsAnalyzerAgent
+from .agent.deepseek_api import BaseAgent
 import subprocess
 import argparse
 import os
 import json
-from pathlib import Path
+import re
 from dotenv import load_dotenv
 
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', '.env'))
 
-
-env_path = Path(__file__).parent.parent.parent / ".env"  # 向上回溯两级到根目录
-load_dotenv(env_path)
 base_url = 'https://api.deepseek.com'
-api_key = os.getenv("DEEPSEEK_API_KEY")  # 从环境变量读取 DeepSeek API 密钥，推荐在 .env 文件中设置
+api_key = os.getenv('DEEPSEEK_API_KEY')
 model = "deepseek-chat"
 
 
@@ -182,6 +181,70 @@ def check_code(code: str):
         
     result = checking(save_fold, python_file_name)
     return result
+
+def analyze_task_metrics(task_prompt: str):
+    '''
+    从任务描述中分析评估指标
+    
+    Params:
+        task_prompt: 包含任务描述、评估方法等的完整文本
+        
+    Returns:
+        metrics_data: 包含识别到的指标信息的字典
+    '''
+    agent = MetricsAnalyzerAgent(base_url, api_key, model)
+    metrics_data = agent.analyze_metrics(task_prompt)
+    return metrics_data
+
+def evaluate_instruction_following(solution: str, generated_code: str):
+    """
+    用大模型评估指令跟随能力四个维度
+    """
+    prompt = f"""
+你是一个代码评审专家，请从以下四个维度对生成代码与参考方案的指令跟随能力进行1-100分打分，并给出简要理由：
+1. 完整性（Completeness）：是否完成了所有要求的任务，覆盖所有指定元素。
+2. 精确性（Precision）：输出格式、参数、字数等是否严格符合要求。
+3. 一致性（Consistency）：输出是否与指令逻辑一致，避免自相矛盾。
+4. 约束遵守（Constraint Adherence）：是否避开禁止内容，遵循明确限制。
+
+参考方案：
+{solution}
+
+生成代码：
+{generated_code}
+
+请严格只输出如下JSON，不要输出任何解释、注释或代码块标记：
+{{
+  "completeness": 分数, "completeness_reason": "",
+  "precision": 分数, "precision_reason": "",
+  "consistency": 分数, "consistency_reason": "",
+  "constraint": 分数, "constraint_reason": ""
+}}
+    """
+
+    def extract_json_from_response(response):
+        # 去除代码块标记
+        response = re.sub(r'```json|```', '', response, flags=re.IGNORECASE).strip()
+        # 尝试提取第一个大括号包裹的内容
+        match = re.search(r'({[\s\S]*})', response)
+        if match:
+            return match.group(1)
+        return response
+
+    agent = BaseAgent(
+        base_url=base_url,
+        api_key=api_key,
+        model_name=model,
+        sys_prompt='你是一个专业的代码评审专家，善于从多维度评估代码与指令的契合度。',
+        temperature=0.2,
+        top_p=0.9
+    )
+    response = agent.generate(prompt)
+    try:
+        json_str = extract_json_from_response(response)
+        return json.loads(json_str)
+    except Exception:
+        return {"error": "模型输出无法解析", "raw": response}
 
 if __name__ == "__main__":
     main()

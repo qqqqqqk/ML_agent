@@ -54,6 +54,28 @@ io.on('connection', (socket) => {
     console.log('Client disconnected:', socket.id);
   });
 
+  // 添加指标分析事件
+  socket.on('analyze-metrics', async (data) => {
+    const { task_prompt, sessionId } = data;
+    
+    try {
+      socket.emit('metrics-analysis-started', { sessionId });
+      
+      const metrics_data = await analyzeTaskMetrics(task_prompt);
+      
+      socket.emit('metrics-analysis-complete', {
+        sessionId,
+        metrics: metrics_data
+      });
+    } catch (error) {
+      console.error('Error in metrics analysis:', error);
+      socket.emit('metrics-analysis-error', {
+        sessionId,
+        error: error.message
+      });
+    }
+  });
+
   // 处理代码生成请求
   socket.on('generate-code', async (data) => {
     const { task_prompt, dataset_paths, sessionId } = data;
@@ -356,11 +378,11 @@ app.post('/api/generate-code', async (req, res) => {
     let error = '';
 
     pythonProcess.stdout.on('data', (data) => {
-      output += data.toString();
+      output += data.toString('utf8');
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      error += data.toString();
+      error += data.toString('utf8');
     });
 
     pythonProcess.on('close', (code) => {
@@ -400,11 +422,11 @@ async function planForMachineTask(task_prompt) {
     let error = '';
 
     pythonProcess.stdout.on('data', (data) => {
-      output += data.toString();
+      output += data.toString('utf8');
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      error += data.toString();
+      error += data.toString('utf8');
     });
 
     pythonProcess.on('close', (code) => {
@@ -439,23 +461,15 @@ async function generateCurrentStepCode(task_prompt, current_step, step_id, previ
     let output = '';
     let error = '';
 
-    // 添加超时机制
-    const timeout = setTimeout(() => {
-      console.error('Python process timeout in generateCurrentStepCode, killing process...');
-      pythonProcess.kill('SIGKILL');
-      reject(new Error('Process timeout - code generation took too long'));
-    }, 60000); // 60秒超时
-
     pythonProcess.stdout.on('data', (data) => {
-      output += data.toString();
+      output += data.toString('utf8');
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      error += data.toString();
+      error += data.toString('utf8');
     });
 
     pythonProcess.on('close', (code) => {
-      clearTimeout(timeout);
       if (code !== 0) {
         reject(new Error(error));
       } else {
@@ -464,7 +478,6 @@ async function generateCurrentStepCode(task_prompt, current_step, step_id, previ
     });
 
     pythonProcess.on('error', (err) => {
-      clearTimeout(timeout);
       console.error('Python process error in generateCurrentStepCode:', err);
       reject(new Error(`Process error: ${err.message}`));
     });
@@ -488,11 +501,11 @@ async function refineAllStepCode(task_prompt, all_step_code) {
     let error = '';
 
     pythonProcess.stdout.on('data', (data) => {
-      output += data.toString();
+      output += data.toString('utf8');
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      error += data.toString();
+      error += data.toString('utf8');
     });
 
     pythonProcess.on('close', (code) => {
@@ -518,25 +531,17 @@ async function checkCode(code) {
     let output = '';
     let error = '';
 
-    // 添加超时机制
-    const timeout = setTimeout(() => {
-      console.error('Python process timeout in checkCode, killing process...');
-      pythonProcess.kill('SIGKILL');
-      resolve({ success: false, stderr: 'Process timeout - code check took too long' });
-    }, 30000); // 30秒超时
-
     pythonProcess.stdout.on('data', (data) => {
-      output += data.toString();
+      output += data.toString('utf8');
     });
 
     pythonProcess.stderr.on('data', (data) => {
       // 实时捕获并打印错误
-      error += data.toString();
-      console.error(`Python Stderr (checkCode): ${data.toString()}`);
+      error += data.toString('utf8');
+      console.error(`Python Stderr (checkCode): ${data.toString('utf8')}`);
     });
 
     pythonProcess.on('close', (code) => {
-      clearTimeout(timeout); // 清除超时
       if (code !== 0) {
         // 当进程以非0代码退出时，也认为是失败
         resolve({ success: false, stderr: error });
@@ -552,7 +557,6 @@ async function checkCode(code) {
     });
 
     pythonProcess.on('error', (err) => {
-      clearTimeout(timeout);
       console.error('Python process error in checkCode:', err);
       resolve({ success: false, stderr: `Process error: ${err.message}` });
     });
@@ -576,11 +580,11 @@ async function reviseCode(task_prompt, code, error_log) {
     let error = '';
 
     pythonProcess.stdout.on('data', (data) => {
-      output += data.toString();
+      output += data.toString('utf8');
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      error += data.toString();
+      error += data.toString('utf8');
     });
 
     pythonProcess.on('close', (code) => {
@@ -592,6 +596,144 @@ async function reviseCode(task_prompt, code, error_log) {
     });
   });
 }
+
+// 添加指标分析API端点
+app.post('/api/analyze-metrics', async (req, res) => {
+  try {
+    const { task_prompt } = req.body;
+    
+    if (!task_prompt) {
+      return res.status(400).json({ error: 'Task prompt is required' });
+    }
+    
+    const metrics_data = await analyzeTaskMetrics(task_prompt);
+    res.json(metrics_data);
+  } catch (error) {
+    console.error('Error analyzing metrics:', error);
+    res.status(500).json({ error: 'Failed to analyze metrics' });
+  }
+});
+
+// 添加指标分析函数
+async function analyzeTaskMetrics(task_prompt) {
+  return new Promise((resolve, reject) => {
+    const pythonProcess = spawn('python', [
+      '-c',
+      `
+import sys
+if sys.stdout.encoding is None or sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
+import os
+sys.path.append(os.getcwd())
+from deepseek_agent.api import analyze_task_metrics
+import json
+
+try:
+    metrics_data = analyze_task_metrics('''${task_prompt}''')
+    print(json.dumps(metrics_data, ensure_ascii=False))
+except Exception as e:
+    print(json.dumps({"error": str(e)}))
+      `
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+
+    let output = '';
+    let errorOutput = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+      output += data.toString('utf8');
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      errorOutput += data.toString('utf8');
+    });
+
+    pythonProcess.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const metrics_data = JSON.parse(output.trim());
+          if (metrics_data.error) {
+            reject(new Error(metrics_data.error));
+          } else {
+            resolve(metrics_data);
+          }
+        } catch (parseError) {
+          reject(new Error('Failed to parse metrics data'));
+        }
+      } else {
+        reject(new Error(`Python process failed: ${errorOutput}`));
+      }
+    });
+  });
+}
+
+// 基于用户反馈自动改进代码
+app.post('/api/feedback', async (req, res) => {
+  try {
+    const { code, feedback, task_prompt, previous_code } = req.body;
+    if (!code || !feedback || !task_prompt) {
+      return res.status(400).json({ message: '缺少必要参数' });
+    }
+    const { spawn } = require('child_process');
+    let output = '';
+    let error = '';
+    const pythonProcess = spawn('python', [
+      '-c',
+      `from deepseek_agent.api import revise_code; import sys; print(revise_code(${JSON.stringify(task_prompt)}, ${JSON.stringify(code)}, ${JSON.stringify(feedback)}))`
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+    pythonProcess.stdout.on('data', (data) => {
+      output += data.toString('utf8');
+    });
+    pythonProcess.stderr.on('data', (data) => {
+      error += data.toString('utf8');
+    });
+    pythonProcess.on('close', (codeNum) => {
+      if (codeNum !== 0) {
+        return res.status(500).json({ message: 'Python revise code error', error });
+      }
+      res.json({ revised_code: output.trim() });
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// 指令跟随能力评估API
+app.post('/api/evaluate-instruction-following', async (req, res) => {
+  const { solution, generated_code } = req.body;
+  if (!solution || !generated_code) {
+    return res.status(400).json({ error: 'solution and generated_code are required' });
+  }
+  try {
+    const pythonProcess = spawn('python', [
+      '-c',
+      `from deepseek_agent.api import evaluate_instruction_following; import json; print(json.dumps(evaluate_instruction_following(${JSON.stringify(solution)}, ${JSON.stringify(generated_code)})))`
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+
+    let output = '';
+    pythonProcess.stdout.on('data', (data) => { output += data.toString('utf8'); });
+    pythonProcess.stderr.on('data', (data) => { console.error('stderr:', data.toString('utf8')); });
+
+    pythonProcess.on('close', (code) => {
+      try {
+        const result = JSON.parse(output.trim());
+        res.json(result);
+      } catch (e) {
+        res.status(500).json({ error: 'Failed to parse python output', raw: output });
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 server.listen(port, () => {
   console.log(`Server is running on port ${port}`);

@@ -5,11 +5,15 @@ const ProcessPanel = ({
   isGenerating,
   generationProgress,
   realTimeSteps,
-  onOutcomeClick
+  onOutcomeClick,
+  onCodeUpdate
 }) => {
   // 迁移的本地状态
   const [selectedStep, setSelectedStep] = useState(null);
   const [stepCode, setStepCode] = useState('');
+  const [showCurrentCode, setShowCurrentCode] = useState(false);
+  const [isEditingCode, setIsEditingCode] = useState(false);
+  const [editedCode, setEditedCode] = useState('');
 
   // 辅助函数
   const getStatusColor = (status) => {
@@ -75,6 +79,112 @@ const ProcessPanel = ({
         position: 'sticky', top: 0, background: '#fff', zIndex: 10,
         padding: '0 0 8px 0', marginTop: 0
       }}>Process Steps</h2>
+      
+      {/* 当前代码状态显示区域 */}
+      {generationProgress.accumulatedCode && (
+        <div style={{
+          marginBottom: '20px',
+          padding: '16px',
+          background: '#f8f9fa',
+          borderRadius: '8px',
+          border: '1px solid #e9ecef'
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '12px'
+          }}>
+            <span style={{ fontWeight: 600, color: '#495057' }}>
+              当前代码状态
+            </span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => setShowCurrentCode(!showCurrentCode)}
+                style={{
+                  background: '#007bff',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '4px 12px',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                {showCurrentCode ? '隐藏代码' : '查看代码'}
+              </button>
+              {showCurrentCode && (
+                <button
+                  onClick={() => {
+                    if (isEditingCode) {
+                      // 保存编辑的代码
+                      if (onCodeUpdate) {
+                        onCodeUpdate(editedCode);
+                      }
+                      setIsEditingCode(false);
+                    } else {
+                      // 开始编辑
+                      setIsEditingCode(true);
+                      setEditedCode(generationProgress.accumulatedCode);
+                    }
+                  }}
+                  style={{
+                    background: isEditingCode ? '#28a745' : '#ffc107',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {isEditingCode ? '保存' : '编辑'}
+                </button>
+              )}
+            </div>
+          </div>
+          {showCurrentCode && (
+            <div style={{
+              background: '#fff',
+              border: '1px solid #dee2e6',
+              borderRadius: '4px',
+              padding: '12px',
+              maxHeight: '300px',
+              overflowY: 'auto',
+              fontSize: '12px',
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word'
+            }}>
+              {isEditingCode ? (
+                <textarea
+                  value={editedCode}
+                  onChange={(e) => setEditedCode(e.target.value)}
+                  style={{
+                    width: '100%',
+                    minHeight: '200px',
+                    border: 'none',
+                    outline: 'none',
+                    fontSize: '12px',
+                    fontFamily: 'monospace',
+                    resize: 'vertical'
+                  }}
+                />
+              ) : (
+                generationProgress.accumulatedCode
+              )}
+            </div>
+          )}
+          <div style={{
+            fontSize: '12px',
+            color: '#6c757d',
+            marginTop: '8px'
+          }}>
+            代码长度: {generationProgress.accumulatedCode.length} 字符
+          </div>
+        </div>
+      )}
+      
       {isGenerating && generationProgress.totalSteps > 0 && (
         <div className="progress-bar" style={{
           width: `${(generationProgress.currentStep / generationProgress.totalSteps) * 100}%`
@@ -108,6 +218,11 @@ const ProcessPanel = ({
               </div>
               <div className="step-title">{step.name}</div>
               <div className="step-message">{step.message}</div>
+              {step.timestamp && (
+                <div style={{fontSize: '11px', color: '#6c757d', marginTop: '4px'}}>
+                  处理时间: {step.timestamp}
+                </div>
+              )}
               {step.code && (
                 <div>
                   <div 

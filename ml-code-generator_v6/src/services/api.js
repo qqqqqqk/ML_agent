@@ -194,4 +194,91 @@ export const generateCode = async (taskPrompt, datasetPath) => {
       finally: []
     }
   };
-}; 
+};
+
+// 指标分析功能
+export const analyzeMetricsRealtime = (taskPrompt, callbacks) => {
+  const socket = connectWebSocket();
+  const sessionId = Date.now().toString();
+  
+  // 设置事件监听器
+  socket.on('metrics-analysis-started', (data) => {
+    if (callbacks.onStarted) callbacks.onStarted(data);
+  });
+  
+  socket.on('metrics-analysis-complete', (data) => {
+    if (callbacks.onComplete) callbacks.onComplete(data);
+    // 清理事件监听器
+    cleanupMetricsEventListeners(socket);
+  });
+  
+  socket.on('metrics-analysis-error', (data) => {
+    if (callbacks.onError) callbacks.onError(data);
+    // 清理事件监听器
+    cleanupMetricsEventListeners(socket);
+  });
+  
+  // 发送指标分析请求
+  socket.emit('analyze-metrics', {
+    task_prompt: taskPrompt,
+    sessionId: sessionId
+  });
+  
+  return sessionId;
+};
+
+// 清理指标分析事件监听器
+const cleanupMetricsEventListeners = (socket) => {
+  socket.off('metrics-analysis-started');
+  socket.off('metrics-analysis-complete');
+  socket.off('metrics-analysis-error');
+};
+
+// HTTP API版本的指标分析
+export const analyzeMetrics = async (taskPrompt) => {
+  const response = await fetch(`${API_BASE_URL}/analyze-metrics`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      task_prompt: taskPrompt
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to analyze metrics');
+  }
+
+  return response.json();
+};
+
+export const submitFeedback = async (feedback, code, taskPrompt, previousCode = null) => {
+  const response = await fetch(`${API_BASE_URL}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      code,
+      feedback,
+      task_prompt: taskPrompt,
+      previous_code: previousCode
+    })
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.message || 'Failed to submit feedback');
+  }
+  const data = await response.json();
+  return data.revised_code;
+};
+
+// 指令跟随能力评估API
+export async function evaluateInstructionFollowing(solution, generatedCode) {
+  const res = await fetch(`${API_BASE_URL}/evaluate-instruction-following`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ solution, generated_code: generatedCode })
+  });
+  if (!res.ok) throw new Error('API error');
+  return await res.json();
+} 
